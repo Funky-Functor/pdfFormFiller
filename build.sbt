@@ -11,7 +11,8 @@ lazy val root = (project in file("."))
     libraryDependencies ++= Seq(
       zioCore,
       pdfBox,
-      zioTest
+      zioTest,
+      zioTestSbt
     ),
     testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
   )

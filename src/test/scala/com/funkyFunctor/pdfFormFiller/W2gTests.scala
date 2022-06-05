@@ -1,12 +1,15 @@
 package com.funkyFunctor.pdfFormFiller
 
 import com.funkyFunctor.pdfFormFiller.TestUtilities._
-import com.funkyFunctor.pdfFormFiller.model.FormFieldRepresentation
+import com.funkyFunctor.pdfFormFiller.model.{FieldType, FormFieldRepresentation}
 import org.apache.pdfbox.pdmodel.interactive.form.PDField
 import zio._
+import zio.console.putStrLn
 import zio.test.Assertion._
 import zio.test.environment.TestEnvironment
-import zio.test.{Assertion, DefaultRunnableSpec, TestResult, ZSpec, assert, assertM}
+import zio.test.{Assertion, DefaultRunnableSpec, ZSpec, assert, assertM}
+
+import java.io.File
 
 object W2gTests extends DefaultRunnableSpec {
   val W2G_FILE = "w2g.pdf"
@@ -162,7 +165,7 @@ object W2gTests extends DefaultRunnableSpec {
     "topmostSubform[0].CopyD[0].Col_Right[0].f1_23[0]",
     "topmostSubform[0].CopyD[0].Col_Right[0].f1_25[0]",
     "topmostSubform[0].CopyD[0].CopyDHeader[0].f1_01[0]"
-  ).map(str => str -> FormFieldRepresentation(str, "Tx", "")).toMap
+  ).map(str => str -> FormFieldRepresentation(str, FieldType.Text, "")).toMap
 
   val buttonFields: Map[String, FormFieldRepresentation] = List(
     "topmostSubform[0].Copy1[0].Copy1Header[0].c1_1[0]",
@@ -174,7 +177,7 @@ object W2gTests extends DefaultRunnableSpec {
     "topmostSubform[0].CopyC[0].CopyCHeader[0].c1_1[0]",
     "topmostSubform[0].CopyD[0].CopyDHeader[0].c1_1[0]",
     "topmostSubform[0].CopyD[0].CopyDHeader[0].c1_1[1]"
-  ).map(str => str -> FormFieldRepresentation(str, "Btn", "Off")).toMap
+  ).map(str => str -> FormFieldRepresentation(str, FieldType.Button, "Off")).toMap
 
   val fieldMap: Map[String, FormFieldRepresentation] = textFields ++ buttonFields
 
@@ -185,28 +188,31 @@ object W2gTests extends DefaultRunnableSpec {
 
   private val test01 = testM("Read data from the classpath and return the expected list of fields in the document") {
     val fields: ZIO[Any, Throwable, List[PDField]] = Managed.fromAutoCloseable(loadFromClasspath(W2G_FILE)).use { is =>
-      val pdfDocument = PdfFormFiller.openPdfDocument(is)
-      pdfDocument.flatMap(PdfFormFiller.listFields)
+      Managed.fromAutoCloseable(PdfFormFiller.openPdfDocument(is)).use {
+        PdfFormFiller.listFields
+      }
     }
 
-    val nameList = fields.map(list => list.map(f => FormFieldRepresentation(f)).sortBy(_.fullyQualifiedName))
+    val nameList = fields.map(list => list.flatMap(f => FormFieldRepresentation(f)).sortBy(_.fullyQualifiedName))
 
     nameList.map(resultNameList => assert(resultNameList)(hasSameElements(fieldMap.values)))
   }
 
   private val test02 = testM("Fill the form with the expected values") {
+    val txtFields: Map[String, String] = textFields.keys.toList.sorted.zipWithIndex.map { case (k, v) =>
+      k -> v.toString
+    }.toMap
+
     Managed.fromAutoCloseable(loadFromClasspath(W2G_FILE)).use { is =>
-      val txtFields: Map[String, String] = textFields.keys.toList.sorted.zipWithIndex.map { case (k, v) =>
-        k -> v.toString
-      }.toMap
-
-      val pdfDocument = PdfFormFiller.openPdfDocument(is)
-      val resultingDocument = pdfDocument.flatMap(PdfFormFiller.replaceAllFieldValues(_, txtFields)).map { doc =>
-        doc.save("""D:\Work\FunkyFunctor\PdfFormFiller\output.pdf""")
-        doc.close()
+      Managed.fromAutoCloseable(PdfFormFiller.openPdfDocument(is)).use { pdfDocument =>
+        assertM {
+          for {
+            resultingDocument <- PdfFormFiller.replaceAllFieldValues(pdfDocument, txtFields)
+            outputFile        <- TestUtilities.saveDocumentToTempFile(resultingDocument)
+            _                 <- putStrLn(s"File written to $outputFile")
+          } yield ()
+        }(Assertion.isUnit)
       }
-
-      assertM(resultingDocument)(Assertion.isUnit)
     }
   }
 }
