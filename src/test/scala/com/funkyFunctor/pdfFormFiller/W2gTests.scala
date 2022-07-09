@@ -1,16 +1,20 @@
 package com.funkyFunctor.pdfFormFiller
 
 import com.funkyFunctor.pdfFormFiller.TestUtilities._
-import com.funkyFunctor.pdfFormFiller.model.FormFieldRepresentation
+import com.funkyFunctor.pdfFormFiller.model.{FormFieldRepresentation, FormParameters, LocalData, Payer, Winner, Winning}
 import org.apache.pdfbox.pdmodel.interactive.form.PDField
 import zio._
 import zio.test.Assertion._
 import zio.test.environment.TestEnvironment
 import zio.test.{Assertion, DefaultRunnableSpec, TestResult, ZSpec, assert, assertM}
 
-object W2gTests extends DefaultRunnableSpec {
-  val W2G_FILE = "w2g.pdf"
+import java.io.ByteArrayInputStream
+import java.nio.file.{Files, Paths, StandardCopyOption}
+import java.time.LocalDate
 
+object W2gTests extends DefaultRunnableSpec {
+//  val W2G_FILE = "w2g.pdf"
+//
   val textFields: Map[String, FormFieldRepresentation] = List(
     "topmostSubform[0].Copy1[0].Col_Left[0].f1_02[0]",
     "topmostSubform[0].Copy1[0].Col_Left[0].f1_03[0]",
@@ -184,10 +188,13 @@ object W2gTests extends DefaultRunnableSpec {
   )
 
   private val test01 = testM("Read data from the classpath and return the expected list of fields in the document") {
-    val fields: ZIO[Any, Throwable, List[PDField]] = Managed.fromAutoCloseable(loadFromClasspath(W2G_FILE)).use { is =>
-      val pdfDocument = PdfFormFiller.openPdfDocument(is)
-      pdfDocument.flatMap(PdfFormFiller.listFields)
-    }
+    val fields: ZIO[Any, Throwable, List[PDField]] = Managed
+      .fromAutoCloseable(W2G.pdfTemplate)
+      .use { is =>
+        PdfFormFiller
+          .openPdfDocument(is)
+          .flatMap(PdfFormFiller.listFields)
+      }
 
     val nameList = fields.map(list => list.map(f => FormFieldRepresentation(f)).sortBy(_.fullyQualifiedName))
 
@@ -195,18 +202,74 @@ object W2gTests extends DefaultRunnableSpec {
   }
 
   private val test02 = testM("Fill the form with the expected values") {
-    Managed.fromAutoCloseable(loadFromClasspath(W2G_FILE)).use { is =>
-      val txtFields: Map[String, String] = textFields.keys.toList.sorted.zipWithIndex.map { case (k, v) =>
-        k -> v.toString
-      }.toMap
+    Managed.fromAutoCloseable(W2G.pdfTemplate).use { is =>
+      val formInput: FormParameters = FormParameters(
+        payerInformation = Payer(
+          federalIdentificationNumber = "payerID",
+          telNumber = Some("(123) 456-7890"),
+          name = "Mr Payer",
+          address = """line1
+              |line 2
+              |line 3
+              |Payer City, NY 12345
+              |""".stripMargin
+        ),
+        winnerInformation = Winner(
+          name = "Mrs Winner",
+          streetAddress = """line1
+              |line2
+              |""".stripMargin,
+          cityAndZipAddress = "Winner City, NJ 67890",
+          fedTaxIdentifier = "payerSSN",
+          stateIdentifier = None,
+          firstIdentification = Some("Driver Licence"),
+          secondIdentification = Some("Passport")
+        ),
+        winning = Winning(
+          reportableAmount = 1000L,
+          dateWon = LocalDate.now(),
+          typeOfWager = "Sport bet",
+          federalTaxWithholdings = 0L,
+          transaction = None,
+          race = None,
+          winningsFromIdenticalWagers = 0L,
+          cashier = None,
+          window = None
+        ),
+        local = LocalData(
+          0L,
+          0L,
+          0L,
+          0L,
+          "Sunny Town"
+        ),
+        calendarYear = "22"
+      )
+      val parameters: Map[String, String] = formInput.toMap()
+      val fields: Map[String, String]     = W2G.fieldsMapping
 
-      val pdfDocument = PdfFormFiller.openPdfDocument(is)
-      val resultingDocument = pdfDocument.flatMap(PdfFormFiller.replaceAllFieldValues(_, txtFields)).map { doc =>
-        doc.save("""D:\Work\FunkyFunctor\PdfFormFiller\output.pdf""")
-        doc.close()
-      }
+      val result = PdfFormFiller
+        .fillDocument(is, parameters, fields)
+        .flatMap { ba =>
+          val bais            = new ByteArrayInputStream(ba)
+          val destinationFile = Paths.get("""D:\Work\FunkyFunctor\PdfFormFiller\output.pdf""")
+          ZIO(Files.copy(bais, destinationFile, StandardCopyOption.REPLACE_EXISTING))
+        }
+        .unit
 
-      assertM(resultingDocument)(Assertion.isUnit)
+      assertM(result)(Assertion.isUnit)
+//      val txtFields: Map[String, String] = textFields.keys.toList.sorted.zipWithIndex.map { case (k, v) =>
+//        System.out.println(s"'$k' | $v")
+//        k -> v.toString
+//      }.toMap
+//
+//      val pdfDocument = PdfFormFiller.openPdfDocument(is)
+//      val resultingDocument = pdfDocument.flatMap(PdfFormFiller.replaceAllFieldValues(_, txtFields)).map { doc =>
+//        doc.save("""D:\Work\FunkyFunctor\PdfFormFiller\output.pdf""")
+//        doc.close()
+//      }
+//
+//      assertM(resultingDocument)(Assertion.isUnit)
     }
   }
 }
